@@ -1,152 +1,145 @@
 import json
 import uuid
 import time
+from typing import Dict, List
 
-windTerm_session_file = 'user.sessions'
-termora_expoter_file = 'Termora.json'
+# 常量定义
+WINDTTERM_SESSION_FILE = 'user.sessions'
+TERMORA_EXPORTER_FILE = 'Termora.json'
 
-# windterm user.sessions 文件并不存放密码,
-default_ssh_password = ""
+# windterm user.sessions 文件并不存放密码, 这里设置一个默认密码，可为空
+DEFAULT_SSH_PASSWORD = ""
 
 # windterm identityFilePath 与 termora 密钥管理器中的 ID 的映射
 # termora 密钥管理器中的 ID 从导出的 Termora.json 中获取
-public_key_map = {
+PUBLIC_KEY_MAP = {
     "windterm_identityFilePath": "termora_keyPairs_id"
 }
-# termora 密钥管理器中的 ID, 未从在 public_key_map 中匹配上时使用
-default_ssh_key_id = ""
+# termora 密钥管理器中的 ID, 未从在 PUBLIC_KEY_MAP 中匹配上时使用
+DEFAULT_SSH_KEY_ID = ""
 
-# --- 不要动
-# 目录名和uuid映射关系
-group_map = {}
-# 存储目录之间父与子关系, 带UUID
-group_uuid_map = {}
+# 不要动
+GroupInfo = Dict[str, str]
+SessionData = Dict[str, str]
 
-def get_uuid():
+def generate_uuid() -> str:
+    """生成不带连字符的UUID"""
     return uuid.uuid4().hex
 
+def load_json_file(file_path: str) -> dict:
+    """加载并解析JSON文件"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"Error loading {file_path}: {str(e)}")
 
-def load_config_file(file: str):
-    with open(file=file, mode='r', encoding="utf-8") as f:
-        data = f.read()
-    return data
+def save_json_file(data: dict, file_path: str) -> None:
+    """保存数据到JSON文件"""
+    try:
+        with open(file_path, 'w', encoding='utf8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+    except IOError as e:
+        raise RuntimeError(f"Error saving {file_path}: {str(e)}")
 
-def write_file(file, data):
-    with open(file=file, mode="w", encoding="utf8") as f:
-        f.write(data)
+class GroupManager:
+    """分组管理类"""
+    def __init__(self):
+        self.group_info: Dict[str, GroupInfo] = {}
+        self.name_to_uuid: Dict[str, str] = {}
 
-def get_group_name_uuid(name: str) -> str:
-    _group_name = name.split(">")
-    _group_name = _group_name[-1]
+    def process_session_groups(self, sessions: List[SessionData]) -> None:
+        """处理所有会话的分组结构"""
+        for session in sessions:
+            group_path = session.get("session.group", "")
+            if not group_path:
+                continue
+            
+            hierarchy = group_path.split('>')
+            parent_uuid = ""
+            
+            for level, group_name in enumerate(hierarchy):
+                if group_name not in self.name_to_uuid:
+                    new_uuid = generate_uuid()
+                    self.name_to_uuid[group_name] = new_uuid
+                    self.group_info[group_name] = {
+                        "uuid": new_uuid,
+                        "parentId": parent_uuid
+                    }
+                parent_uuid = self.name_to_uuid[group_name]
 
-    return group_uuid_map.get(_group_name, "")
+def convert_session_to_host(session: SessionData, sort_timestamp: int) -> dict:
+    """转换单个会话到Termora主机格式"""
+    target_parts = session["session.target"].split('@')
+    ssh_user = target_parts[0]
+    ssh_host = target_parts[-1] if len(target_parts) > 1 else ""
 
-def build_group_map_from_windterm(sessions: list):
-    for s in sessions:
-        _group = s.get("session.group", None)
-        if _group:
-            # 使用 '>' 分隔符分割字符串
-            groups = _group.split('>')
-            for i in range(0, len(groups)):
-                _group = groups[i]
-                if not group_uuid_map.get(_group, False):
-                    _uuid = get_uuid()
-                    group_uuid_map[_group] = _uuid
-                    if i > 0:
-                        group_map[_group] = {
-                            "uuid":_uuid,
-                            "parentId": group_uuid_map.get(groups[i-1], "") 
-                        }
-                    else:
-                        group_map[_group]= {
-                            "uuid":_uuid,
-                            "parentId":"" 
-                        }
-                        
+    # 处理认证信息
+    identity_keys = session.get("ssh.identityFilePath") or session.get("ssh.identityFilePath.windows") or ""
+    auth_type = "PublicKey" if identity_keys else "Password"
+    auth_value = PUBLIC_KEY_MAP.get(identity_keys, DEFAULT_SSH_KEY_ID) if auth_type == "PublicKey" else DEFAULT_SSH_PASSWORD
 
+    host_data = {
+        "id": session["session.uuid"].replace("-", ""),
+        "name": session["session.label"],
+        "protocol": session["session.protocol"],
+        "host": ssh_host,
+        "port": session["session.port"],
+        "username": ssh_user,
+        "authentication": {
+            "type": auth_type,
+            "password": auth_value
+        },
+        "sort": sort_timestamp,
+        "createDate": sort_timestamp,
+        "updateDate": sort_timestamp
+    }
 
-def convert_to_termora_host(data: dict, offset: int) -> dict:
-    unix_timestamp_ms = int(time.time() * 1000) + offset
+    if group_path := session.get("session.group"):
+        group_name = group_path.split('>')[-1]
+        host_data["parentId"] = GroupManager().name_to_uuid.get(group_name, "")
 
-    _identityFile = data.get("ssh.identityFilePath", "")
-    _identityFileWindows = data.get("ssh.identityFilePath.windows", "")
-    if _identityFile != "":
-        auth_type = "PublicKey"
-        auth_pwd = public_key_map.get(_identityFile, default_ssh_key_id)
-    elif _identityFileWindows != "":
-        auth_type = "PublicKey"
-        auth_pwd = public_key_map.get(_identityFileWindows, default_ssh_key_id)
-    else:
-        auth_type = "Password"
-        auth_pwd = default_ssh_password
-
-    _target = data["session.target"]
-    _target = _target.split('@')
-    _ssh_user = _target[0]
-    _ssh_host = _target[-1]
-    _host_info = {
-            "id": data["session.uuid"].replace("-", ""),
-            "name": data["session.label"],
-            "protocol": data["session.protocol"],
-            "host": _ssh_host,
-            "port": data["session.port"],
-            "username": _ssh_user,
-            "authentication": {
-                "type": auth_type,
-                "password": auth_pwd
-            },
-            "sort": unix_timestamp_ms,
-            "createDate": unix_timestamp_ms,
-            "updateDate": unix_timestamp_ms
-        }
-
-    if data["session.group"] != "":
-        _host_info["parentId"] = get_group_name_uuid(name=data["session.group"])
-    
-    return _host_info
+    return host_data
 
 def main():
-    windTerm_session = load_config_file(file=windTerm_session_file)
-    windTerm_session = json.loads(windTerm_session)
-
-    # 将 windterm 的分组转换成 termora 格式
-    build_group_map_from_windterm(sessions=windTerm_session)
-
-    # 将 windterm 的主机转换成 termora 格式
-    _hosts = []
-    _offset = 0
-    for s in windTerm_session:
-        _h = convert_to_termora_host(data=s, offset=_offset)
-        _hosts.append(_h)
-    
-    # 生成 termora 的目录层级数据
-    termora_groups = []
-    _offset = 0
-    for x in group_map:
-        _unix_timestamp_ms = int(time.time() * 1000) + _offset
-        _id = group_map[x].get("uuid", "")
-
-        _g = {
-            "id": _id,
-            "name": x,
-            "protocol": "Folder",
-            "sort": _unix_timestamp_ms,
-            "createDate": _unix_timestamp_ms,
-            "updateDate": _unix_timestamp_ms
-        }
-        _p_id = group_map[x].get("parentId", "")
-        if _p_id != "":
-            _g["parentId"] = _p_id
-        termora_groups.append(_g)
-        _offset +=1
-
-    # write_file(file="group_map.json", data=json.dumps(termora_groups, indent=4))
-
-    termora_expoter = load_config_file(file=termora_expoter_file)
-    termora_expoter = json.loads(termora_expoter)
-    termora_groups.extend(_hosts)
-    termora_expoter["hosts"] = termora_groups
-    write_file(file="test.json", data=json.dumps(termora_expoter, indent=4, ensure_ascii=False))
+    try:
+        # 初始化数据
+        windterm_sessions = load_json_file(WINDTTERM_SESSION_FILE)
+        termora_template = load_json_file(TERMORA_EXPORTER_FILE)
+        
+        # 处理分组
+        group_manager = GroupManager()
+        group_manager.process_session_groups(windterm_sessions)
+        
+        base_timestamp = int(time.time() * 1000)
+        
+        # 生成分组数据
+        termora_groups = []
+        for index, (group_name, info) in enumerate(group_manager.group_info.items()):
+            termora_groups.append({
+                "id": info["uuid"],
+                "name": group_name,
+                "protocol": "Folder",
+                "sort": base_timestamp + index,
+                "createDate": base_timestamp + index,
+                "updateDate": base_timestamp + index,
+                "parentId": info["parentId"]
+            })
+        
+        # 生成主机数据
+        host_records = []
+        group_count = len(group_manager.group_info)
+        for index, session in enumerate(windterm_sessions):
+            sort_ts = base_timestamp + group_count + index
+            host_records.append(convert_session_to_host(session, sort_ts))
+        
+        # 合并数据并保存
+        termora_template["hosts"] = termora_groups + host_records
+        save_json_file(termora_template, "Termora_Export.json")
+        
+    except Exception as e:
+        print(f"Conversion failed: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     main()
