@@ -13,3 +13,12 @@
 6. 使用 `python3 main.py` 运行函数，会生成 test.json
 7. 关闭 Termora， 备份数据文件
 8. 将 test.json 文件导入 Termora 中即可
+
+> 鉴于脚本非常简单，使用中有任何问题， 请先问 AI
+> 实在解决不了再提 issue
+
+## Thanks
+
+- [termora](https://github.com/TermoraDev/termora)
+- [deepseek](https://www.deepseek.com)
+- [DuckDuckGoAi](https://Duck.ai)
