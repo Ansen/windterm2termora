@@ -68,20 +68,22 @@ class GroupManager:
                     }
                 parent_uuid = self.name_to_uuid[group_name]
 
-def convert_session_to_host(session: SessionData, sort_timestamp: int) -> dict:
+def convert_session_to_host(session: SessionData, sort_timestamp: int, group_manager: GroupManager) -> dict:
     """转换单个会话到Termora主机格式"""
     target_parts = session["session.target"].split('@')
-    ssh_user = target_parts[0]
-    ssh_host = target_parts[-1] if len(target_parts) > 1 else ""
+    ssh_user = "root" if len(target_parts) == 1 else target_parts[0]
+    ssh_host = target_parts[-1]
 
     # 处理认证信息
     identity_keys = session.get("ssh.identityFilePath") or session.get("ssh.identityFilePath.windows") or ""
     auth_type = "PublicKey" if identity_keys else "Password"
     auth_value = PUBLIC_KEY_MAP.get(identity_keys, DEFAULT_SSH_KEY_ID) if auth_type == "PublicKey" else DEFAULT_SSH_PASSWORD
 
+    seassion_label = session.get("session.label", "host")
+
     host_data = {
         "id": session["session.uuid"].replace("-", ""),
-        "name": session["session.label"],
+        "name": seassion_label,
         "protocol": session["session.protocol"],
         "host": ssh_host,
         "port": session["session.port"],
@@ -97,7 +99,8 @@ def convert_session_to_host(session: SessionData, sort_timestamp: int) -> dict:
 
     if group_path := session.get("session.group"):
         group_name = group_path.split('>')[-1]
-        host_data["parentId"] = GroupManager().name_to_uuid.get(group_name, "")
+        if group_manager.name_to_uuid.get(group_name) is not None:
+            host_data["parentId"] = group_manager.name_to_uuid.get(group_name)
 
     return host_data
 
@@ -116,7 +119,7 @@ def main():
         # 生成分组数据
         termora_groups = []
         for index, (group_name, info) in enumerate(group_manager.group_info.items()):
-            termora_groups.append({
+            group = {
                 "id": info["uuid"],
                 "name": group_name,
                 "protocol": "Folder",
@@ -124,14 +127,19 @@ def main():
                 "createDate": base_timestamp + index,
                 "updateDate": base_timestamp + index,
                 "parentId": info["parentId"]
-            })
+            }
+            if group["parentId"] == "":
+                del group["parentId"]
+            termora_groups.append(group)
         
         # 生成主机数据
         host_records = []
         group_count = len(group_manager.group_info)
         for index, session in enumerate(windterm_sessions):
+            if session["session.group"] == "Shell sessions":
+                continue
             sort_ts = base_timestamp + group_count + index
-            host_records.append(convert_session_to_host(session, sort_ts))
+            host_records.append(convert_session_to_host(session, sort_ts, group_manager))
         
         # 合并数据并保存
         termora_template["hosts"] = termora_groups + host_records
