@@ -11,7 +11,7 @@
 1. 将 WindTerm 中用到的私钥导入到 Termora 中
 2. 克隆本项目 `git clone https://github.com/Ansen/windterm2termora.git`
 2. 导出 Termora 的配置文件为 Termora.json, 并**复制**一份到项目目录
-    - **注意**: 导出时 `输入密码加密文件` 对话框, 需要`点`否`, 加密会导致脚本无法解析 Termora 的主机列表
+    - **注意**: 导出时 `输入密码加密文件` 对话框, 需要点`否`, 加密会导致脚本无法解析 Termora 的主机列表
 3. **复制** WindTerm 数据目录的 user.sessions 到项目目录
 4. 确保 Termora.json、user.sessions、main.py 三个文件在同一个目录
 5. 根据注释修改 main.py 文件中的三个参数：DEFAULT_SSH_PASSWORD、PUBLIC_KEY_MAP、DEFAULT_SSH_KEY_ID
